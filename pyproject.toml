@@ -4,16 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hledger-ai"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first AI models for receipt OCR and transaction classification"
 requires-python = ">=3.10"
 dependencies = [
     "hledger-core>=0.1.0",
-    "torch>=2.0",
-    "transformers>=4.30",
-    "gpt4all>=1.0",
+    "pydantic>=2.0",
+    "requests>=2.28",
     "Pillow>=9.0",
     "typeguard>=2.13.3",
+]
+
+[project.optional-dependencies]
+setfit = [
+    "setfit>=1.0",
+    "sentence-transformers>=2.2",
+]
+finetune = [
+    "peft>=0.10",
+    "trl>=0.7",
 ]
 
 [tool.setuptools.packages.find]
