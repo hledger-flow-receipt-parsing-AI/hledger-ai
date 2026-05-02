@@ -44,6 +44,7 @@ class TransactionClassifier:
     """
 
     ZERO_SHOT_MODEL = "qwen3:0.6b"
+    name = "TransactionClassifier"
 
     def __init__(
         self,
