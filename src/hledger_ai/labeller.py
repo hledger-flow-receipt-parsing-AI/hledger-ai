@@ -18,12 +18,14 @@ from typeguard import typechecked
 
 from hledger_ai.candidates.dates import capture_time
 from hledger_ai.dataset.examples import cropped_path
-from hledger_ai.evaluation.scoring import comparable
+from hledger_ai.evaluation.scoring import answer_of
+from hledger_ai.highlights import Highlight, field_highlights
 from hledger_ai.models.catalogue import build_ocr_engine
 from hledger_ai.ocr.cache import OcrCache, ocr_image
 from hledger_ai.ocr.types import OcrEngine
 from hledger_ai.paths import AiPaths, FinancePaths
 from hledger_ai.privacy import make_private
+from hledger_ai.receipt_fields import OPTIONAL_AMOUNTS
 from hledger_ai.suggest.engine import Suggestion
 from hledger_ai.suggest.evidence import ReceiptEvidence
 from hledger_ai.suggest.service import (
@@ -36,8 +38,24 @@ log = logging.getLogger(__name__)
 
 MANUAL_ADDRESS = "manual address"
 _MONEY = ("amount", "change", "subtotal", "total_tax")
+# The suggestion "leave this optional amount empty" (the subtotal).
+NOTHING_TEXT = ""
 _TEXT = ("category", "bank_account", "currency")
 _DATE_SUGGESTIONS = 3
+# The labeller question that shows a field's evidence on the photo (UI-7).
+_QUESTION_OF_FIELD = {
+    "date": "date",
+    "time": "date",
+    "amount": "amount",
+    "change": "change",
+    "subtotal": "subtotal",
+    "total_tax": "total_tax",
+    "category": "category",
+    "bank_account": "bank_account",
+    "currency": "currency",
+    "is_withdrawal": "is_withdrawal",
+    "shop": "address_selector",
+}
 
 # OCR engines stay loaded between receipts of one labelling session.
 _ENGINES: Dict[str, OcrEngine] = {}
@@ -92,6 +110,13 @@ def _as_ai(*, text: str, suggestion: Suggestion) -> AISuggestion:
 
 
 @typechecked
+def _money_text(*, value: Any) -> str:
+    """An amount as the labeller shows it; None (a subtotal the receipt
+    does not have) is the empty answer."""
+    return NOTHING_TEXT if value is None else f"{float(value):.2f}"
+
+
+@typechecked
 def to_labeller_suggestions(
     *, suggestions: Dict[str, List[Suggestion]]
 ) -> Dict[str, List[AISuggestion]]:
@@ -112,7 +137,7 @@ def to_labeller_suggestions(
     for name in _MONEY:
         if name in suggestions:
             converted[name] = [
-                _as_ai(text=f"{float(s.value):.2f}", suggestion=s)
+                _as_ai(text=_money_text(value=s.value), suggestion=s)
                 for s in suggestions[name]
             ]
     for name in _TEXT + ("is_withdrawal",):
@@ -129,6 +154,28 @@ def to_labeller_suggestions(
 
 
 @typechecked
+def highlights_by_question(
+    *, per_field: Dict[str, List[Highlight]]
+) -> Dict[str, List[Highlight]]:
+    """Highlights keyed by labeller question; the date question shows the
+    date and the time, each box once."""
+    by_question: Dict[str, List[Highlight]] = {}
+    for field, found in per_field.items():
+        question_id = _QUESTION_OF_FIELD.get(field)
+        if question_id is None:
+            continue
+        kept = by_question.setdefault(question_id, [])
+        kept += [h for h in found if h not in kept]
+    return by_question
+
+
+@typechecked
+def _logged(*, value: Any) -> str:
+    """A value in the corrections log; an empty optional amount is ""."""
+    return NOTHING_TEXT if value is None else str(value)
+
+
+@typechecked
 class LabellerSuggester:
     """Suggestions and timing for one receipt that is being labelled."""
 
@@ -140,14 +187,18 @@ class LabellerSuggester:
         timer: FieldTimer,
         corrections_path: str,
         image_path: str,
+        image_paths: Sequence[str] = (),
     ) -> None:
         self._service = service
         self._evidence = evidence
         self._timer = timer
         self._corrections_path = corrections_path
         self._image_path = image_path
+        # The photos read, in the order of the evidence (for highlights).
+        self._image_paths = tuple(image_paths)
         # What was suggested before the user answered anything (TR-4).
         self._first_guess: Optional[Dict[str, List[Suggestion]]] = None
+        self._latest: Optional[Dict[str, List[Suggestion]]] = None
 
     @staticmethod
     def open(
@@ -216,6 +267,7 @@ class LabellerSuggester:
             timer=FieldTimer(path=ai.timings_path, receipt_id=receipt_id),
             corrections_path=ai.corrections_path,
             image_path=raw_image_paths[0] if raw_image_paths else "",
+            image_paths=crops,
         )
 
     def suggest(
@@ -228,18 +280,42 @@ class LabellerSuggester:
         )
         if self._first_guess is None:
             self._first_guess = suggestions
-        return to_labeller_suggestions(suggestions=suggestions)
+        self._latest = suggestions
+        converted = to_labeller_suggestions(suggestions=suggestions)
+        return converted
+
+    def highlights(self) -> Dict[str, List[Highlight]]:
+        """Where on the photos the latest suggestions come from, per
+        labeller question, for the TUI to box on the receipt (UI-7)."""
+        if self._latest is None:
+            return {}
+        found = self._service.image_engine(evidence=self._evidence)
+        if found is None:
+            return {}
+        engine_id, engine = found
+        boxes = highlights_by_question(
+            per_field=field_highlights(
+                engine=engine,
+                evidence=self._evidence[engine_id],
+                image_paths=self._image_paths,
+                suggestions=self._latest,
+            )
+        )
+        return boxes
 
     def finish(self, *, answers: Dict[str, Any]) -> int:
         """TR-4: log every first suggestion the user did not keep, with the
         value they accepted instead. Returns how many were logged."""
-        accepted = known_from_answers(answers=answers)
+        accepted: Dict[str, Any] = known_from_answers(answers=answers)
+        for field in OPTIONAL_AMOUNTS:
+            if field not in accepted and answers.get(field) == NOTHING_TEXT:
+                accepted[field] = None  # left empty on purpose
         rows = []
         for field, suggested in (self._first_guess or {}).items():
             if field not in accepted or not suggested:
                 continue
             best = suggested[0]
-            if comparable(field=field, value=best.value) == comparable(
+            if answer_of(field=field, value=best.value) == answer_of(
                 field=field, value=accepted[field]
             ):
                 continue
@@ -248,8 +324,8 @@ class LabellerSuggester:
                     "timestamp": datetime.now().isoformat(timespec="seconds"),
                     "image_path": self._image_path,
                     "field": field,
-                    "suggested": str(best.value),
-                    "accepted": str(accepted[field]),
+                    "suggested": _logged(value=best.value),
+                    "accepted": _logged(value=accepted[field]),
                     "confidence": best.confidence,
                     "sources": list(best.sources),
                 }

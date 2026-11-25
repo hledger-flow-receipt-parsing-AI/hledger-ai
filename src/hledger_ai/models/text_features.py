@@ -40,6 +40,10 @@ class TextFeaturizer:
     def is_fitted(self) -> bool:
         return self._vectorizer is not None
 
+    def transform(self, *, texts: Sequence[str]) -> Any:
+        """Sparse matrix with one row per text, in the fitted vocabulary."""
+        return self._vectorizer.transform(list(texts))
+
     def vector(self, *, evidence: ReceiptEvidence) -> Any:
         """Sparse row vector of the receipt text."""
         # Models saved before the token existed get one when loaded.

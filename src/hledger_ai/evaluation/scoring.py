@@ -13,6 +13,7 @@ from typeguard import typechecked
 from hledger_ai.models.experts import TrainingExample
 from hledger_ai.receipt_fields import (
     FIELDS,
+    OPTIONAL_AMOUNTS,
     ReceiptFacts,
     known_from_facts,
     known_key,
@@ -21,6 +22,8 @@ from hledger_ai.strategies import STRATEGIES, Strategy
 from hledger_ai.suggest.engine import SuggestionEngine, image_strategy_id
 
 _MONEY_FIELDS = ("amount", "change", "subtotal", "total_tax")
+# An optional amount left empty: an answer to score like any other.
+NOTHING = "<nothing>"
 
 
 @typechecked
@@ -46,6 +49,25 @@ def comparable(*, field: str, value: Any) -> Optional[Hashable]:
     if isinstance(value, date):
         return value
     return str(value)
+
+
+@typechecked
+def answer_of(*, field: str, value: Any) -> Optional[Hashable]:
+    """A suggested or accepted value as comparable(), with None for an
+    optional amount (the subtotal) read as the answer "nothing"."""
+    if value is None and field in OPTIONAL_AMOUNTS:
+        return NOTHING
+    return comparable(field=field, value=value)
+
+
+@typechecked
+def truth_of(*, field: str, facts: ReceiptFacts) -> Optional[Hashable]:
+    """What a label answers for *field*: an optional amount a complete
+    label leaves empty is "nothing"; other missing fields are unknown."""
+    value = facts.get(field=field)
+    if value is None and not facts.complete:
+        return None
+    return answer_of(field=field, value=value)
 
 
 @typechecked
@@ -84,9 +106,7 @@ class Baseline:
                 table: Dict[Tuple, Counter] = defaultdict(Counter)
                 for example in examples:
                     known = _known_for(strategy=strategy, facts=example.facts)
-                    target = comparable(
-                        field=field, value=example.facts.get(field=field)
-                    )
+                    target = truth_of(field=field, facts=example.facts)
                     if known is None or target is None:
                         continue
                     table[Baseline._key(known=known)][target] += 1
@@ -162,16 +182,14 @@ def score_engine(
             )
             elapsed = time.monotonic() - started
             for field in fields:
-                truth = comparable(
-                    field=field, value=example.facts.get(field=field)
-                )
+                truth = truth_of(field=field, facts=example.facts)
                 if truth is None:
                     continue
                 score = per_field[field]
                 score.total += 1
                 score.seconds += elapsed
                 top = suggestions.get(field)
-                if top and comparable(field=field, value=top[0].value) == truth:
+                if top and answer_of(field=field, value=top[0].value) == truth:
                     score.correct += 1
                 guess = baseline.predict(
                     strategy=strategy, field=field, facts=example.facts

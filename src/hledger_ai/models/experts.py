@@ -24,6 +24,7 @@ from hledger_ai.models.features import (
 from hledger_ai.models.ranker import CandidateRanker, rank_values
 from hledger_ai.models.text_features import TextFeaturizer
 from hledger_ai.receipt_fields import (
+    OPTIONAL_AMOUNTS,
     ReceiptFacts,
     known_from_facts,
     known_key,
@@ -163,6 +164,51 @@ class AmountExpert:
 
 
 @typechecked
+class OptionalAmountExpert:
+    """An amount not every receipt has (the subtotal): first whether the
+    user enters one at all, then which printed amount it is. "Nothing" is
+    ranked as the value None, next to the amounts.
+
+    Only complete labels teach the first part: a partial label lacks the
+    field because it was never reached.
+    """
+
+    def __init__(self, *, field: str, reference: Optional[str] = None) -> None:
+        self.field = field
+        self.reference = reference
+        self._present = ClassExpert(field=f"has_{field}")
+        self._value = AmountExpert(field=field, reference=reference)
+
+    def fit(
+        self,
+        *,
+        examples: Sequence[TrainingExample],
+        featurizer: Optional[TextFeaturizer] = None,
+    ) -> "OptionalAmountExpert":
+        self._present = ClassExpert(field=f"has_{self.field}").fit(
+            examples=examples, featurizer=featurizer
+        )
+        self._value = AmountExpert(
+            field=self.field, reference=self.reference
+        ).fit(examples=examples)
+        return self
+
+    def suggest(
+        self, *, evidence: ReceiptEvidence, known: Dict[str, Any]
+    ) -> Ranked:
+        values = self._value.suggest(evidence=evidence, known=known)
+        chances = dict(self._present.suggest(evidence=evidence, known={}))
+        if not chances:
+            return values  # no complete label: nothing learnt about absence
+        present = chances.get("yes", 0.0)
+        ranked: Ranked = [(None, 1.0 - present)]
+        ranked += [
+            (value, confidence * present) for value, confidence in values
+        ]
+        return sorted(ranked, key=lambda vc: -vc[1])
+
+
+@typechecked
 class ChangeExpert:
     """Change returned: zero for most card payments, otherwise one of the
     printed amounts. Uses the payment account, the category and the amount
@@ -216,6 +262,14 @@ class ChangeExpert:
             if value > 0
         ]
         return sorted(ranked, key=lambda vc: -vc[1])
+
+    def text_scores(
+        self, *, texts: Sequence[str], has_change: bool
+    ) -> List[float]:
+        """How much each text speaks for change being returned, or not."""
+        return self._any_change.text_scores(
+            texts=texts, value="yes" if has_change else "no"
+        )
 
 
 @typechecked
@@ -326,11 +380,17 @@ def class_label(*, value: Any) -> Optional[str]:
 
 @typechecked
 def class_target(*, field: str, facts: ReceiptFacts) -> Optional[str]:
-    """The class a label holds for *field*; ``has_change`` is change yes/no."""
+    """The class a label holds for *field*; ``has_change`` is change yes/no
+    and ``has_subtotal`` whether a subtotal was entered at all (unknown
+    for a partial label)."""
     if field == "has_change":
         if facts.change is None:
             return None
         return "yes" if facts.change > 0 else "no"
+    if field.startswith("has_") and field[len("has_") :] in OPTIONAL_AMOUNTS:
+        if not facts.complete:
+            return None
+        return "no" if facts.get(field=field[len("has_") :]) is None else "yes"
     return class_label(value=facts.get(field=field))
 
 
@@ -446,3 +506,29 @@ class ClassExpert:
             ),
             key=lambda cp: (-cp[1], cp[0]),
         )
+
+    def text_scores(self, *, texts: Sequence[str], value: str) -> List[float]:
+        """How much each text (a printed row or box) speaks for *value*:
+        its part in the model's score for that class. Zero when untrained
+        or when *value* is no class the model knows."""
+        nothing = [0.0] * len(texts)
+        if (
+            not texts
+            or self._model is None
+            or self._featurizer is None
+            or not self._featurizer.is_fitted
+        ):
+            return nothing
+        classes = [str(c) for c in self._model.classes_]
+        if value not in classes:
+            return nothing
+        matrix = self._featurizer.transform(texts=texts)
+        # The text columns come first; the context tokens follow them.
+        coefficients = self._model.coef_[:, : matrix.shape[1]]
+        if coefficients.shape[0] == 1:
+            # Two classes: the coefficients are those of the second one.
+            sign = 1.0 if classes.index(value) == 1 else -1.0
+            weights = coefficients[0] * sign
+        else:
+            weights = coefficients[classes.index(value)]
+        return [float(score) for score in matrix @ weights]

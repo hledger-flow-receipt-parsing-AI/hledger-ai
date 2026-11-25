@@ -188,3 +188,23 @@ def test_the_nothing_known_strategy_is_scored_for_priors_only() -> None:
 
     assert "ST-19" not in with_image
     assert priors["ST-19"]["currency"].correct == 4
+
+
+def test_an_empty_subtotal_is_scored_as_the_answer_nothing() -> None:
+    from dataclasses import replace
+
+    from hledger_ai.evaluation.scoring import NOTHING, answer_of, truth_of
+
+    empty = facts_from_label(label=make_label(subtotal=None))
+    given = facts_from_label(label=make_label(subtotal=12.79))
+
+    assert truth_of(field="subtotal", facts=empty) == NOTHING
+    assert truth_of(field="subtotal", facts=given) == 1279
+    assert answer_of(field="subtotal", value=None) == NOTHING
+    # A partial label never reached the question: unknown, not "nothing".
+    assert truth_of(field="subtotal", facts=replace(empty, complete=False)) is (
+        None
+    )
+    # Only optional amounts: a missing tax stays unknown.
+    no_tax = facts_from_label(label=make_label(total_tax=None))
+    assert truth_of(field="total_tax", facts=no_tax) is None

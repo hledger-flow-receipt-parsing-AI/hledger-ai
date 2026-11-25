@@ -10,7 +10,7 @@ from hledger_config.config.DirPathsConfig import DirPathsConfig
 from hledger_config.config.Filenames import FileNames
 from hledger_config.config.MatchingAlgoConfig import MatchingAlgoConfig
 from hledger_config.config.ReceiptImgConfig import ReceiptImgConfig
-from helpers import card_receipt
+from helpers import card_receipt, make_evidence, make_label
 from PIL import Image
 from test_app_training import FakeOcr, _ai, _finance_root
 
@@ -297,3 +297,136 @@ def test_finishing_without_corrections_writes_nothing(tmp_path: Path) -> None:
 
     assert suggester.finish(answers={"currency": "EUR"}) == 0
     assert not Path(ai.corrections_path).exists()
+
+
+def test_highlights_point_at_the_boxes_behind_the_suggestions(
+    tmp_path: Path,
+) -> None:
+    ocr = FakeOcr()
+    finance, ai = _finance_root(tmp_path, ocr), _ai(tmp_path)
+    train(
+        finance=finance,
+        ai=ai,
+        names=["priors", "rapidocr-linear"],
+        folds=2,
+        ocr_engines={"rapidocr-default": ocr},
+    )
+    raw = _new_receipt(tmp_path, ocr)
+    suggester = LabellerSuggester.open(
+        config=_config(tmp_path),
+        raw_image_paths=[raw],
+        ocr_engines={"rapidocr-default": ocr},
+    )
+    assert suggester.highlights() == {}  # nothing suggested yet
+
+    suggester.suggest(answers={})
+    highlights = suggester.highlights()
+
+    crop = str(tmp_path / "finance" / "proc" / "20250401_090000_cropped.jpg")
+    assert [h.text for h in highlights["amount"]] == ["6,35", "6,35"]
+    assert {h.image_path for h in highlights["amount"]} == {crop}
+    # The date question gets the date and the time; here one box has both.
+    assert [h.text for h in highlights["date"]] == ["Datum 01-04-2025 09:00"]
+    # The category is told from the printed text, so its boxes are text
+    # lines; every label has the same payment account, so nothing tells
+    # that one apart and nothing is shown for it.
+    assert "6,35" not in [h.text for h in highlights["category"]]
+    assert "bank_account" not in highlights
+
+
+def test_leaving_the_subtotal_empty_is_suggested_as_an_empty_answer() -> None:
+    converted = to_labeller_suggestions(
+        suggestions={
+            "subtotal": [
+                Suggestion(None, 0.8, ("ST-15",)),
+                Suggestion(12.5, 0.2, ("ST-15",)),
+            ]
+        }
+    )
+
+    assert [s.question for s in converted["subtotal"]] == ["", "12.50"]
+
+
+def _add_subtotal_receipts(tmp_path: Path, ocr: FakeOcr) -> None:
+    """Supermarket receipts that print a subtotal, labelled with it, on the
+    same days as the fixture's receipts without one."""
+    import json
+
+    root = tmp_path / "finance"
+    for index in range(12):
+        paid = 5.0 + 1.5 * index
+        before = paid + 1.25
+        raw = root / "in" / f"2025030{index % 9 + 1}_11000{index}.jpg"
+        crop = root / "proc" / f"{raw.stem}_cropped.jpg"
+        for path in (raw, crop):
+            Image.new("RGB", (4, 4), (index, 3, 0)).save(path)
+        evidence = make_evidence(
+            rows=[
+                ("Supermarkt Zonneveld",),
+                (f"Datum {index + 1:02d}-03-2025 11:{index:02d}",),
+                ("Kaas", "4,10"),
+                ("SUBTOTAAL", f"{before:.2f}".replace(".", ",")),
+                ("Korting", "1,25"),
+                ("TOTAAL", f"{paid:.2f}".replace(".", ",")),
+                ("PIN", f"{paid:.2f}".replace(".", ",")),
+            ]
+        )
+        sha = file_sha256(path=str(crop))
+        ocr.by_sha[sha] = OcrResult(
+            **{
+                **evidence.ocr[0].__dict__,
+                "image_sha256": sha,
+                "engine": ocr.engine_id,
+            }
+        )
+        folder = root / "labels" / f"supermarket{index}"
+        folder.mkdir(parents=True)
+        (folder / "receipt_image_to_obj_label.json").write_text(
+            json.dumps(
+                make_label(
+                    date=f"2025-03-{index + 1:02d}T11:{index:02d}:00",
+                    shop_name="Supermarkt Zonneveld",
+                    amount=paid,
+                    subtotal=before,
+                    image_paths=[str(raw)],
+                )
+            )
+        )
+
+
+def test_an_empty_subtotal_counts_as_an_answer_when_finishing(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    ocr = FakeOcr()
+    finance, ai = _finance_root(tmp_path, ocr), _ai(tmp_path)
+    _add_subtotal_receipts(tmp_path, ocr)
+    train(
+        finance=finance,
+        ai=ai,
+        names=["priors", "rapidocr-linear"],
+        folds=2,
+        ocr_engines={"rapidocr-default": ocr},
+    )
+
+    def finish(answers: dict) -> list:
+        suggester = LabellerSuggester.open(
+            config=_config(tmp_path),
+            raw_image_paths=[_new_receipt(tmp_path, ocr)],
+            ocr_engines={"rapidocr-default": ocr},
+        )
+        first = suggester.suggest(answers={})
+        # The new receipt prints no subtotal: leave it empty.
+        assert first["subtotal"][0].question == ""
+        suggester.finish(answers=answers)
+        path = Path(ai.corrections_path)
+        if not path.exists():
+            return []
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        path.unlink()
+        return [(r["field"], r["suggested"], r["accepted"]) for r in rows]
+
+    assert finish({"subtotal": ""}) == []  # kept: nothing to log
+    assert finish({"subtotal": "4.20"}) == [("subtotal", "", "4.2")]
+

@@ -1,7 +1,8 @@
 """Tier-2 experts: a first guess per field from the receipt image (CI-2)."""
 
+from dataclasses import replace
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from helpers import card_receipt, cash_receipt, make_evidence, make_label
 
@@ -10,8 +11,10 @@ from hledger_ai.models.experts import (
     ChangeExpert,
     ClassExpert,
     DateExpert,
+    OptionalAmountExpert,
     TimeExpert,
     TrainingExample,
+    class_target,
 )
 from hledger_ai.receipt_fields import facts_from_label
 
@@ -317,3 +320,129 @@ def test_having_a_linked_bank_transaction_at_all_is_informative() -> None:
 
     assert linked[0][0] == "alex:examplebank:checking"
     assert blind[0][0] == "alex:wallet:checking"
+
+
+def test_class_expert_scores_the_texts_that_point_to_a_class() -> None:
+    expert = ClassExpert(field="bank_account").fit(
+        examples=_card_examples() + _cash_examples()
+    )
+    texts = ["CONTANT", "TOTAAL", "PIN"]
+
+    wallet = expert.text_scores(texts=texts, value="alex:wallet:physical")
+    checking = expert.text_scores(
+        texts=texts, value="alex:examplebank:checking"
+    )
+
+    assert wallet[0] > 0 and wallet[0] > max(wallet[1], wallet[2])
+    assert checking[2] > 0 and checking[2] > max(checking[0], checking[1])
+
+
+def test_an_untrained_class_expert_scores_nothing() -> None:
+    expert = ClassExpert(field="bank_account")
+
+    assert expert.text_scores(texts=["PIN"], value="x") == [0.0]
+
+
+def test_change_expert_scores_what_says_there_was_no_change() -> None:
+    expert = ChangeExpert().fit(examples=_card_examples() + _cash_examples())
+    texts = ["PIN", "CONTANT"]
+
+    none = expert.text_scores(texts=texts, has_change=False)
+    some = expert.text_scores(texts=texts, has_change=True)
+
+    assert none[0] > none[1]
+    assert some[1] > some[0]
+
+
+# ------------------------------------------------- an optional amount
+
+
+def _subtotal_examples() -> List[TrainingExample]:
+    """Half the receipts print a subtotal (a supermarket with a discount
+    row) and the user entered it; the other half print none and the user
+    left the question empty."""
+    examples = []
+    for index, total in enumerate(TOTALS):
+        paid = float(total.replace(",", "."))
+        if index % 2 == 0:
+            before = round(paid + 1.25, 2)
+            evidence = make_evidence(
+                rows=[
+                    ("Supermarkt Zonneveld",),
+                    ("Brood", "2,49"),
+                    ("SUBTOTAAL", f"{before:.2f}".replace(".", ",")),
+                    ("Korting", "1,25"),
+                    ("TOTAAL", total),
+                    ("PIN", total),
+                ]
+            )
+            subtotal: Optional[float] = before
+        else:
+            evidence = card_receipt(total=total)
+            subtotal = None
+        examples.append(
+            TrainingExample(
+                facts=facts_from_label(
+                    label=make_label(amount=paid, subtotal=subtotal)
+                ),
+                evidence=evidence,
+            )
+        )
+    return examples
+
+
+def test_optional_amount_expert_says_nothing_when_none_is_printed() -> None:
+    expert = OptionalAmountExpert(field="subtotal").fit(
+        examples=_subtotal_examples()
+    )
+
+    ranked = expert.suggest(evidence=card_receipt(total="6,35"), known={})
+
+    assert ranked[0][0] is None  # leave the subtotal empty
+    assert ranked[0][1] > 0.5
+    assert 6.35 in [value for value, _ in ranked]  # still on offer
+
+
+def test_optional_amount_expert_picks_a_printed_subtotal() -> None:
+    expert = OptionalAmountExpert(field="subtotal").fit(
+        examples=_subtotal_examples()
+    )
+    evidence = make_evidence(
+        rows=[
+            ("Supermarkt Zonneveld",),
+            ("Kaas", "4,10"),
+            ("SUBTOTAAL", "9,35"),
+            ("Korting", "1,25"),
+            ("TOTAAL", "8,10"),
+            ("PIN", "8,10"),
+        ]
+    )
+
+    ranked = expert.suggest(evidence=evidence, known={})
+
+    assert ranked[0][0] == 9.35
+    assert [value for value, _ in ranked].index(None) > 0
+
+
+def test_a_partial_label_does_not_teach_that_there_is_no_subtotal() -> None:
+    # A receipt moved away halfway never reached the subtotal question.
+    partial = [
+        TrainingExample(
+            facts=replace(e.facts, complete=False), evidence=e.evidence
+        )
+        for e in _subtotal_examples()
+        if e.facts.subtotal is None
+    ]
+    with_subtotal = [e for e in _subtotal_examples() if e.facts.subtotal]
+    expert = OptionalAmountExpert(field="subtotal").fit(
+        examples=with_subtotal + partial
+    )
+
+    ranked = expert.suggest(evidence=card_receipt(total="6,35"), known={})
+
+    assert ranked[0][0] is not None
+    assert class_target(field="has_subtotal", facts=partial[0].facts) is None
+    assert (
+        class_target(field="has_subtotal", facts=with_subtotal[0].facts)
+        == "yes"
+    )

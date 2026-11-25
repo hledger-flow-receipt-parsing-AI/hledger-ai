@@ -34,10 +34,21 @@ FIELDS: Tuple[str, ...] = (
 LABEL_SCHEMA_VERSION = "1"
 
 
+# Amounts a receipt may lack: leaving the question empty is an answer too
+# (most receipts print no subtotal), which the models learn and suggest as
+# the value None.
+OPTIONAL_AMOUNTS: Tuple[str, ...] = ("subtotal",)
+
+
 @typechecked
 @dataclass(frozen=True)
 class ReceiptFacts:
-    """One labelled receipt as flat field values."""
+    """One labelled receipt as flat field values.
+
+    *complete* is False for a partial label (a receipt moved away as "not
+    mine" halfway): a field missing there was not answered, so it says
+    nothing about whether the receipt has it.
+    """
 
     the_datetime: Optional[datetime]
     category: Optional[str]
@@ -57,6 +68,7 @@ class ReceiptFacts:
     csv_other_party: Optional[str]
     csv_description: Optional[str]
     image_paths: Tuple[str, ...]
+    complete: bool = True
 
     def shop(self) -> Optional[str]:
         """The shop exactly as the labeller's address list shows it."""

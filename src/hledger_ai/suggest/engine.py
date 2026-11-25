@@ -25,6 +25,7 @@ from hledger_ai.models.experts import (
     ChangeExpert,
     ClassExpert,
     DateExpert,
+    OptionalAmountExpert,
     Ranked,
     TimeExpert,
     TrainingExample,
@@ -32,13 +33,19 @@ from hledger_ai.models.experts import (
 )
 from hledger_ai.models.priors import FrequencyPrior
 from hledger_ai.models.text_features import TextFeaturizer
-from hledger_ai.receipt_fields import FIELDS, known_from_facts, known_key
+from hledger_ai.receipt_fields import (
+    FIELDS,
+    OPTIONAL_AMOUNTS,
+    known_from_facts,
+    known_key,
+)
 from hledger_ai.strategies import STRATEGIES, get_strategy
 from hledger_ai.suggest.evidence import ReceiptEvidence
 
 # Bump when experts, features or fusion change (DS-2: model version).
 # 4: text vectors no longer leak between training folds (TextFeaturizer).
-ENGINE_VERSION = "4"
+# 5: "nothing" is a subtotal answer (OptionalAmountExpert).
+ENGINE_VERSION = "5"
 
 # The strategy that knows nothing: the most frequent value so far.
 USUAL_VALUE = "ST-19"
@@ -109,17 +116,26 @@ def image_strategy_id(*, field: str) -> Optional[str]:
 
 
 @typechecked
+def _amount_expert(*, field: str, reference: Optional[str] = None) -> Any:
+    """The expert of an amount field; one a receipt may lack (the
+    subtotal) can also answer "nothing"."""
+    if field in OPTIONAL_AMOUNTS:
+        return OptionalAmountExpert(field=field, reference=reference)
+    return AmountExpert(field=field, reference=reference)
+
+
+@typechecked
 def _build_experts() -> Dict[str, Any]:
     experts: Dict[str, Any] = {
         "date": DateExpert(),
         "time": TimeExpert(),
         "amount": AmountExpert(field="amount"),
         "change": ChangeExpert(context=_context(field="change")),
-        "subtotal": AmountExpert(field="subtotal"),
-        "total_tax": AmountExpert(field="total_tax"),
+        "subtotal": _amount_expert(field="subtotal"),
+        "total_tax": _amount_expert(field="total_tax"),
         # ST-20: the same fields once the paid total is known.
-        "subtotal|total": AmountExpert(field="subtotal", reference="total"),
-        "total_tax|total": AmountExpert(field="total_tax", reference="total"),
+        "subtotal|total": _amount_expert(field="subtotal", reference="total"),
+        "total_tax|total": _amount_expert(field="total_tax", reference="total"),
     }
     for field in (
         "is_withdrawal",
@@ -147,6 +163,10 @@ class SuggestionEngine:
     def uses_image(self) -> bool:
         return bool(self._experts)
 
+    def expert(self, *, field: str) -> Optional[Any]:
+        """The tier-2 expert of *field*, if this engine has one."""
+        return self._experts.get(field)
+
     @staticmethod
     def train(
         *,
@@ -169,7 +189,9 @@ class SuggestionEngine:
             for name, expert in _build_experts().items():
                 if not wanted(name.split("|")[0]):
                     continue
-                if isinstance(expert, (ClassExpert, ChangeExpert)):
+                if isinstance(
+                    expert, (ClassExpert, ChangeExpert, OptionalAmountExpert)
+                ):
                     expert.fit(examples=examples, featurizer=featurizer)
                 else:
                     expert.fit(examples=examples)

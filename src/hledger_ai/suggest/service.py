@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from typeguard import typechecked
 
@@ -111,6 +111,16 @@ class SuggestionService:
 
     def is_empty(self) -> bool:
         return not self._models
+
+    def image_engine(
+        self, *, evidence: Dict[str, ReceiptEvidence]
+    ) -> Optional[Tuple[str, SuggestionEngine]]:
+        """An OCR engine id in *evidence* and a trained engine that reads
+        its text (to show where suggestions come from on the photo)."""
+        for model in self._models:
+            if model.spec.uses_image and model.spec.ocr_engine in evidence:
+                return model.spec.ocr_engine, model.engine
+        return None
 
     def suggest(
         self,

@@ -55,6 +55,12 @@ separate items (the item description is a copy of the category), so there
 is nothing to learn from. ST-20 does what ST-9 was meant for with the
 fields that exist.
 
+Most receipts print no subtotal, and the user then leaves that question
+empty. "Nothing" is therefore an answer ST-15 and ST-20 learn and suggest
+like any amount: the model first decides whether a subtotal is entered at
+all, then which printed amount it is. Only complete labels teach the first
+part; a partial label ("not mine") never reached the question.
+
 ## Evaluation (EV)
 
 - **EV-1** Every model and strategy reports accuracy per field on a held-out
@@ -65,7 +71,9 @@ fields that exist.
   default 4). `--folds 1` is a single split.
 - **EV-3** Every result is compared against a baseline: the most frequent
   value given the known fields. A model that does not beat the baseline is
-  not used. A tier-1 prior is that baseline itself and stays in use.
+  not used. A tier-1 prior is that baseline itself and stays in use. An
+  empty subtotal counts as the answer "nothing", for the model and for the
+  baseline alike.
 - **EV-4** "Best model" in this document means the highest EV-1 accuracy among
   the models that satisfy HW-3 and the speed limits (SP-*).
 
@@ -142,6 +150,18 @@ fields that exist.
 - **UI-5** Private dataset configurations are highlighted orange.
 - **UI-6** Tier-1 priors (TR-1) use the same cell; their training shows `100%`
   as soon as they are rebuilt.
+- **UI-7** While labelling, the receipt preview gets thin light-green boxes
+  around the printed text behind the focused question's first suggestion
+  (the amount, date or time itself; for category, payment account, currency
+  and shop the text that pushed the model to its answer), so the user can
+  check a suggestion at a glance. Separate from the suggestions themselves;
+  `--no-receipt-highlights` turns it off and Alt+h toggles it in the TUI.
+- **UI-8** Every question starts with its best suggestion filled in, so the
+  user corrects the guesses that are wrong (the first keystroke replaces
+  one) and moves past the others with Enter. A guess follows the re-ranking
+  (CI-1) until the user touches it; what the user typed or picked, and the
+  label of a receipt opened again, is never replaced. Moving back to an
+  earlier question confirms nothing.
 
 ## Speed (SP)
 

@@ -279,3 +279,14 @@ def test_with_nothing_known_the_priors_fall_back_to_the_usual_values() -> None:
     assert suggestions["currency"][0].value == "EUR"
     assert suggestions["change"][0].value == 0.0
     assert "amount" not in suggestions
+
+
+def test_the_engine_suggests_leaving_the_subtotal_empty() -> None:
+    from test_models_experts import _subtotal_examples
+
+    engine = SuggestionEngine.train(examples=_subtotal_examples() * 2)
+
+    found = engine.suggest(evidence=card_receipt(total="6,35"), known={})
+
+    assert found["subtotal"][0].value is None
+    assert found["subtotal"][0].confidence > 0.5

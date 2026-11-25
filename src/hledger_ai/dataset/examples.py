@@ -136,6 +136,7 @@ def _facts_from_answers(*, answers: Dict[str, Any]) -> ReceiptFacts:
         csv_other_party=None,
         csv_description=None,
         image_paths=(),
+        complete=False,
     )
 
 
