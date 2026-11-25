@@ -21,29 +21,51 @@ IDs are stable: never renumber, and retire an ID instead of reusing it.
   limited to fields in the current receipt label structure. Each entry has an
   ID, the known fields, the improved field and its tier (TR-1).
 
-## Strategies (ST), seed list
+## Strategies (ST)
 
-| ID   | Known                  | Improves                              |
-| ---- | ---------------------- | ------------------------------------- |
-| ST-1 | category               | shop name, address                    |
-| ST-2 | shop name              | category                              |
-| ST-3 | shop name              | address (known branches)              |
-| ST-4 | address                | shop name                             |
-| ST-5 | date + total           | linked CSV transaction                |
-| ST-6 | linked CSV transaction | shop name, date, total, payment account |
-| ST-7 | shop name              | item descriptions, item categories    |
-| ST-8 | items                  | category                              |
-| ST-9 | items + tax            | subtotal, total                       |
+"image" is the receipt photo, read by an OCR engine. ST-10 to ST-15 are the
+first guesses from the image alone (CI-2); ST-19 needs nothing and is the
+baseline of EV-3.
+
+| ID    | Known                    | Improves                                   |
+| ----- | ------------------------ | ------------------------------------------ |
+| ST-1  | category                 | shop name, address                         |
+| ST-2  | shop name                | category                                   |
+| ST-3  | shop name                | address (known branches)                   |
+| ST-4  | address                  | shop name                                  |
+| ST-5  | date + total             | linked CSV transaction                     |
+| ST-6  | linked CSV transaction   | shop name, category, payment account, date, total |
+| ST-7  | shop name                | item descriptions, item categories         |
+| ST-8  | items                    | category                                   |
+| ST-9  | items + tax              | subtotal, total                            |
+| ST-10 | image                    | date, time                                 |
+| ST-11 | image                    | amount paid, change                        |
+| ST-12 | image                    | shop name, address                         |
+| ST-13 | image                    | category, withdrawal yes/no                |
+| ST-14 | image                    | payment account, currency                  |
+| ST-15 | image                    | subtotal, total tax                        |
+| ST-16 | category                 | payment account                            |
+| ST-17 | payment account          | currency, change                           |
+| ST-18 | image + amount           | change                                     |
+| ST-19 | nothing                  | the usual value of every choice field      |
+| ST-20 | image + amount + change  | subtotal, total tax                        |
+
+ST-7, ST-8 and ST-9 are registered but inactive: the current labels hold no
+separate items (the item description is a copy of the category), so there
+is nothing to learn from. ST-20 does what ST-9 was meant for with the
+fields that exist.
 
 ## Evaluation (EV)
 
 - **EV-1** Every model and strategy reports accuracy per field on a held-out
   set it was never trained on.
-- **EV-2** The held-out set is the newest receipts (split by time), so the
-  result reflects future receipts.
+- **EV-2** Held-out receipts are always newer than the receipts trained on.
+  Receipts are sorted by date and cut into chunks; each fold trains on all
+  earlier chunks and tests on the next one (forward chaining, `--folds`,
+  default 4). `--folds 1` is a single split.
 - **EV-3** Every result is compared against a baseline: the most frequent
   value given the known fields. A model that does not beat the baseline is
-  not used.
+  not used. A tier-1 prior is that baseline itself and stays in use.
 - **EV-4** "Best model" in this document means the highest EV-1 accuracy among
   the models that satisfy HW-3 and the speed limits (SP-*).
 
@@ -71,7 +93,8 @@ IDs are stable: never renumber, and retire an ID instead of reusing it.
 
 ## Training (TR)
 
-- **TR-1** Each strategy is implemented in the cheapest tier that passes EV-3:
+- **TR-1** Each strategy is implemented in the cheapest tier that passes EV-3;
+  a higher tier is used only where it is more accurate (EV-4):
   1. priors: lookup and frequency tables built from the labels, rebuilt in
      seconds;
   2. small classifiers: trained in minutes on a CPU;
