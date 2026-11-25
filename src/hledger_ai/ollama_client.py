@@ -24,6 +24,10 @@ class OllamaClient:
     def __init__(
         self, *, base_url: str = "http://localhost:11434"
     ) -> None:
+        # PR-1: receipts are only sent to a server on this machine.
+        from hledger_ai.privacy import assert_local_url
+
+        assert_local_url(url=base_url)
         self._base_url = base_url.rstrip("/")
 
     # ------------------------------------------------------------------

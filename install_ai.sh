@@ -4,6 +4,7 @@
 # Detects available hardware (GPU/VRAM/RAM) and installs the right
 # components:
 #
+#   0. OCR for the locally trained receipt models (no GPU, no sudo)
 #   1. Ollama (local LLM runtime)
 #   2. Ollama models (VLM + text, sized to fit your VRAM)
 #   3. Python training dependencies (SetFit, LoRA via peft/trl)
@@ -13,6 +14,7 @@
 #   ./install_ai.sh                    # auto-detect everything
 #   ./install_ai.sh --cpu-only         # skip GPU detection, CPU models only
 #   ./install_ai.sh --skip-ollama      # skip Ollama install (already have it)
+#   ./install_ai.sh --skip-ocr         # skip the OCR install
 #   ./install_ai.sh --skip-training    # skip training deps (SetFit, peft, trl)
 #   ./install_ai.sh --dry-run          # show what would be installed
 
@@ -35,6 +37,7 @@ err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 CPU_ONLY=false
 SKIP_OLLAMA=false
 SKIP_TRAINING=false
+SKIP_OCR=false
 DRY_RUN=false
 
 for arg in "$@"; do
@@ -42,6 +45,7 @@ for arg in "$@"; do
         --cpu-only)       CPU_ONLY=true ;;
         --skip-ollama)    SKIP_OLLAMA=true ;;
         --skip-training)  SKIP_TRAINING=true ;;
+        --skip-ocr)       SKIP_OCR=true ;;
         --dry-run)        DRY_RUN=true ;;
         --help|-h)
             echo "Usage: $0 [--cpu-only] [--skip-ollama] [--skip-training] [--dry-run]"
@@ -135,6 +139,22 @@ echo ""
 info "Selected models:"
 info "  VLM (receipt OCR):        ${VLM_MODEL}"
 info "  Text (classification):    ${TEXT_MODEL}"
+echo ""
+
+# ── Step 0: OCR for the locally trained receipt models ───────────────
+# These models (hledger-ai --train) run on any laptop and need no Ollama.
+echo -e "${BOLD}── Step 0: OCR (locally trained receipt models) ───${NC}"
+
+if $SKIP_OCR; then
+    info "Skipping OCR install (--skip-ocr)"
+else
+    # rapidocr is installed WITHOUT its dependencies: it would pull in
+    # opencv-python-headless, which replaces the GUI build of OpenCV that
+    # the receipt rotate/crop windows need.
+    run "pip install --no-deps rapidocr"
+    run "pip install onnxruntime omegaconf colorlog pyclipper shapely psutil scikit-learn scipy joblib"
+    ok "OCR installed. Train with: hledger_preprocessor --config config.yaml --train"
+fi
 echo ""
 
 # ── Step 1: Install Ollama ───────────────────────────────────────────
