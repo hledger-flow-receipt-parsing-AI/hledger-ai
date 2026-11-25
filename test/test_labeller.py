@@ -430,3 +430,43 @@ def test_an_empty_subtotal_counts_as_an_answer_when_finishing(
     assert finish({"subtotal": ""}) == []  # kept: nothing to log
     assert finish({"subtotal": "4.20"}) == [("subtotal", "", "4.2")]
 
+
+def test_manual_address_questions_get_suggestions(tmp_path: Path) -> None:
+    """A shop entered by hand: its parts are read from the receipt."""
+    ocr = FakeOcr()
+    finance, ai = _finance_root(tmp_path, ocr), _ai(tmp_path)
+    train(
+        finance=finance,
+        ai=ai,
+        names=["priors", "rapidocr-linear"],
+        folds=2,
+        ocr_engines={"rapidocr-default": ocr},
+    )
+    raw = _new_receipt(tmp_path, ocr)
+    suggester = LabellerSuggester.open(
+        config=_config(tmp_path),
+        raw_image_paths=[raw],
+        ocr_engines={"rapidocr-default": ocr},
+    )
+
+    first = suggester.suggest(answers={})
+
+    assert first["shop_name"][0].question == "Voorbeeld Markt"
+    assert first["shop_street"][0].question == "Dorpsstraat"
+    assert first["shop_house_nr"][0].question == "12"
+    assert first["shop_city"][0].question == "Voorbeeldstad"
+    assert first["shop_country"][0].question == "Netherlands"
+    assert first["shop_street"][0].model_name == "ST-12"  # read
+
+    boxes = suggester.highlights()
+    assert [h.text for h in boxes["shop_street"]] == ["Dorpsstraat 12"]
+    assert [h.text for h in boxes["shop_name"]] == ["Voorbeeld Markt"]
+
+    later = suggester.suggest(
+        answers={
+            "address_selector": "manual address",
+            "shop_street": "Molenweg",
+        }
+    )
+    assert "shop_street" not in later  # never suggest what was typed
+    assert "shop_name" in later

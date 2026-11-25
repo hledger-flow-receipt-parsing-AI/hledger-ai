@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from typeguard import typechecked
 
@@ -121,6 +121,57 @@ class SuggestionService:
             if model.spec.uses_image and model.spec.ocr_engine in evidence:
                 return model.spec.ocr_engine, model.engine
         return None
+
+    def _address_knowledge(
+        self, *, evidence: Dict[str, ReceiptEvidence]
+    ) -> Tuple[Any, Optional[ReceiptEvidence]]:
+        """The address knowledge of a model that read this receipt's photos
+        (its reads were measured), else of any model; and that text."""
+        knowledge, text = None, None
+        for model in self._models:
+            if model.engine.address is None:
+                continue
+            if model.spec.uses_image and model.spec.ocr_engine in evidence:
+                return model.engine.address, evidence[model.spec.ocr_engine]
+            if knowledge is None:
+                knowledge = model.engine.address
+        return knowledge, text
+
+    def address_parts(
+        self,
+        *,
+        evidence: Dict[str, ReceiptEvidence],
+        answers: Dict[str, Any],
+    ) -> Dict[str, List[Suggestion]]:
+        """Suggestions for the manual address questions (CI-6), keyed by
+        question id."""
+        from hledger_ai.address_parts import suggest_address_parts
+
+        knowledge, text = self._address_knowledge(evidence=evidence)
+        return suggest_address_parts(
+            knowledge=knowledge, evidence=text, answers=answers
+        )
+
+    def address_highlights(
+        self,
+        *,
+        evidence: Dict[str, ReceiptEvidence],
+        image_paths: Sequence[str],
+        suggestions: Dict[str, List[Suggestion]],
+    ) -> Dict[str, List[Any]]:
+        """Where on the photo the first manual address suggestions were
+        read (UI-7), keyed by question id."""
+        from hledger_ai.address_parts import address_highlights
+
+        knowledge, text = self._address_knowledge(evidence=evidence)
+        if text is None:
+            return {}
+        return address_highlights(
+            knowledge=knowledge,
+            evidence=text,
+            image_paths=image_paths,
+            suggestions=suggestions,
+        )
 
     def suggest(
         self,

@@ -20,6 +20,14 @@ IDs are stable: never renumber, and retire an ID instead of reusing it.
 - **CI-5** All cross-inference strategies are kept in one registry (ST-*),
   limited to fields in the current receipt label structure. Each entry has an
   ID, the known fields, the improved field and its tier (TR-1).
+- **CI-6** When the user enters a shop by hand ("manual address"), its name,
+  street, house number, zipcode, city and country each get suggestions:
+  read from the receipt (ST-12, helped by the names, streets and cities the
+  labels know), and the usual city and country of a shop (ST-19). The known
+  shops' own addresses are not offered: "manual address" says the shop is
+  none of them. The confidence of a read is how often that read was the
+  labelled value, measured as for a shop never labelled before: every shop
+  counts once, and a receipt may only use the spellings of other shops.
 
 ## Strategies (ST)
 

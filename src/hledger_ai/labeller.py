@@ -199,6 +199,8 @@ class LabellerSuggester:
         # What was suggested before the user answered anything (TR-4).
         self._first_guess: Optional[Dict[str, List[Suggestion]]] = None
         self._latest: Optional[Dict[str, List[Suggestion]]] = None
+        # The manual address questions' suggestions, by question id.
+        self._latest_parts: Dict[str, List[Suggestion]] = {}
 
     @staticmethod
     def open(
@@ -282,6 +284,19 @@ class LabellerSuggester:
             self._first_guess = suggestions
         self._latest = suggestions
         converted = to_labeller_suggestions(suggestions=suggestions)
+        # The manual address questions (CI-6): asked when the shop is not
+        # in the address list, so mostly for shops never labelled before.
+        try:
+            self._latest_parts = self._service.address_parts(
+                evidence=self._evidence, answers=answers
+            )
+        except Exception:  # never let them stop the other suggestions
+            log.exception("Manual address suggestions failed")
+            self._latest_parts = {}
+        for question_id, ranked in self._latest_parts.items():
+            converted[question_id] = [
+                _as_ai(text=str(s.value), suggestion=s) for s in ranked
+            ]
         return converted
 
     def highlights(self) -> Dict[str, List[Highlight]]:
@@ -301,6 +316,16 @@ class LabellerSuggester:
                 suggestions=self._latest,
             )
         )
+        try:
+            boxes.update(
+                self._service.address_highlights(
+                    evidence=self._evidence,
+                    image_paths=self._image_paths,
+                    suggestions=self._latest_parts,
+                )
+            )
+        except Exception:  # the other boxes still count
+            log.exception("Manual address boxes failed")
         return boxes
 
     def finish(self, *, answers: Dict[str, Any]) -> int:

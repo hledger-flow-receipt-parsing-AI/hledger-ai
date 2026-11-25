@@ -44,7 +44,8 @@ from hledger_ai.suggest.evidence import ReceiptEvidence
 
 # Bump when experts, features or fusion change (DS-2: model version).
 # 4: text vectors no longer leak between training folds (TextFeaturizer).
-# 5: "nothing" is a subtotal answer (OptionalAmountExpert).
+# 5: "nothing" is a subtotal answer (OptionalAmountExpert); manual address
+#    knowledge.
 ENGINE_VERSION = "5"
 
 # The strategy that knows nothing: the most frequent value so far.
@@ -155,13 +156,22 @@ class SuggestionEngine:
         *,
         experts: Dict[str, Any],
         priors: Dict[Tuple[str, str], FrequencyPrior],
+        address: Any = None,
     ) -> None:
         self._experts = experts  # field (or "field|reference") -> expert
         self._priors = priors  # (strategy id, improved field) -> prior
+        # address_parts.AddressKnowledge: the manual address questions
+        # (CI-6); None in engines trained before it existed.
+        self._address = address
 
     @property
     def uses_image(self) -> bool:
         return bool(self._experts)
+
+    @property
+    def address(self) -> Optional[Any]:
+        """What the labels say about shop addresses (AddressKnowledge)."""
+        return self._address
 
     def expert(self, *, field: str) -> Optional[Any]:
         """The tier-2 expert of *field*, if this engine has one."""
@@ -237,7 +247,13 @@ class SuggestionEngine:
                     priors[(USUAL_VALUE, target)] = FrequencyPrior.fit(
                         pairs=usual
                     )
-        return SuggestionEngine(experts=experts, priors=priors)
+        address = None
+        if wanted("shop") and examples:
+            # Imported here: address_parts uses this module's Suggestion.
+            from hledger_ai.address_parts import AddressKnowledge
+
+            address = AddressKnowledge.fit(examples=examples)
+        return SuggestionEngine(experts=experts, priors=priors, address=address)
 
     def _from_image(
         self,
@@ -358,6 +374,9 @@ class SuggestionEngine:
                 "version": ENGINE_VERSION,
                 "experts": self._experts,
                 "priors": {k: p.to_json() for k, p in self._priors.items()},
+                "address": (
+                    None if self._address is None else self._address.to_json()
+                ),
             },
             path,
         )
@@ -365,12 +384,18 @@ class SuggestionEngine:
     @staticmethod
     def load(*, path: str) -> "SuggestionEngine":
         data = joblib.load(path)
+        address = None
+        if data.get("address") is not None:
+            from hledger_ai.address_parts import AddressKnowledge
+
+            address = AddressKnowledge.from_json(data=data["address"])
         return SuggestionEngine(
             experts=data["experts"],
             priors={
                 k: FrequencyPrior.from_json(data=p)
                 for k, p in data["priors"].items()
             },
+            address=address,
         )
 
 
