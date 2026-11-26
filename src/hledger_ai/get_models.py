@@ -106,13 +106,11 @@ def build_transaction_classifier(
     setfit_model_dir: Optional[str] = None,
     category_namespace: Optional[CategoryNamespace] = None,
 ) -> TransactionClassifier:
-    """Build the transaction classifier with SetFit + zero-shot cascade."""
-    client = OllamaClient(base_url=ollama_url)
-    return TransactionClassifier(
-        client=client,
-        setfit_model_dir=setfit_model_dir,
-        category_namespace=category_namespace,
-    )
+    """The transaction classifier.  It runs the locally trained
+    ``csv-linear`` model; the Ollama and SetFit arguments are kept for
+    callers of the old cascade and ignored."""
+    del ollama_url, setfit_model_dir, category_namespace
+    return TransactionClassifier()
 
 
 def get_models(

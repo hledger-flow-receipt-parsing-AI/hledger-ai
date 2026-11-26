@@ -20,7 +20,28 @@ from typeguard import typechecked
 
 from hledger_ai.dataset.configuration import DatasetConfiguration
 from hledger_ai.progress.format import format_cell
+from hledger_ai.strategies import STRATEGIES
 from hledger_ai.training.state import ModelState
+
+
+@typechecked
+def unit_of(*, configuration: DatasetConfiguration) -> str:
+    """What the dataset counts: receipts, or bank rows."""
+    return "rows" if configuration.kind == "transactions" else "receipts"
+
+
+@typechecked
+def strategies_of(
+    *, configuration: DatasetConfiguration, strategy_ids: Sequence[str]
+) -> Tuple[str, ...]:
+    """The strategies that answer about this kind of dataset."""
+    surface = (
+        "transaction" if configuration.kind == "transactions" else "receipt"
+    )
+    surfaces = {s.id: s.surface for s in STRATEGIES}
+    return tuple(
+        s for s in strategy_ids if surfaces.get(s, "receipt") == surface
+    )
 
 _NAME_WIDTH = 24
 _CELL_WIDTH = 26
@@ -73,6 +94,9 @@ def build_table(
 ) -> Table:
     """UI-1, UI-2: one row per model in *states* (None: never trained on
     this configuration), one cell per strategy."""
+    strategy_ids = strategies_of(
+        configuration=configuration, strategy_ids=strategy_ids
+    )
     rows = []
     for model, state in states.items():
         cells = []
@@ -138,7 +162,7 @@ def render_table(
     title = (
         f"dataset {table.index + 1}/{table.count}"
         f"  {configuration.dataset_hash[:12]}  {kind}"
-        f"  {configuration.receipt_count} receipts"
+        f"  {configuration.receipt_count} {unit_of(configuration=configuration)}"
         f"  registered {configuration.registered_at}"
     )
     if colour:
@@ -154,7 +178,8 @@ def render_table(
     last = min(first + fits, total)
     lines = [
         title,
-        "cell: training %,ETA  inference %,ETA  accuracy on unseen receipts",
+        "cell: training %,ETA  inference %,ETA  accuracy on unseen "
+        + unit_of(configuration=configuration),
         "",
         "model".ljust(_NAME_WIDTH)
         + "".join(s.ljust(_CELL_WIDTH) for s in table.strategy_ids[first:last]),

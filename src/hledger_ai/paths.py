@@ -65,11 +65,8 @@ class AiPaths:
         demo or test root never loads models trained on real receipts.
         Folders set explicitly in the config's ``ai:`` section win.
         """
-        finance_root = os.path.abspath(config.dir_paths.root_finance_path)
-        digest = hashlib.sha256(finance_root.encode("utf-8")).hexdigest()[:8]
-        own = os.path.join(
-            os.path.expanduser(DEFAULT_AI_ROOT),
-            f"{os.path.basename(finance_root)}-{digest}",
+        own = AiPaths.own_folder(
+            finance_root=config.dir_paths.root_finance_path
         )
         ai = getattr(config, "ai", None)
         models = ai.models_dir if ai else _UNSET_MODELS_DIR
@@ -85,6 +82,26 @@ class AiPaths:
                 if feedback == _UNSET_FEEDBACK_DIR
                 else os.path.expanduser(feedback)
             ),
+        )
+
+    @staticmethod
+    def own_folder(*, finance_root: str) -> str:
+        """``~/.hledger-ai/<basename>-<sha8>`` of a finance root."""
+        finance_root = os.path.abspath(os.path.expanduser(finance_root))
+        digest = hashlib.sha256(finance_root.encode("utf-8")).hexdigest()[:8]
+        return os.path.join(
+            os.path.expanduser(DEFAULT_AI_ROOT),
+            f"{os.path.basename(finance_root)}-{digest}",
+        )
+
+    @staticmethod
+    def for_root(*, finance_root: str) -> "AiPaths":
+        """The default AI folder of another finance root on this machine
+        (``ai.transaction_model_root``)."""
+        own = AiPaths.own_folder(finance_root=finance_root)
+        return AiPaths(
+            models_dir=os.path.join(own, "models"),
+            feedback_dir=os.path.join(own, "feedback"),
         )
 
     @property

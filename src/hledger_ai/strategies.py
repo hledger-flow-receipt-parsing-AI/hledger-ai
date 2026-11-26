@@ -18,6 +18,7 @@ EVIDENCE_FIELDS: Tuple[str, ...] = (
     "shop_name",  # manual address entry: the name typed first
     "address",  # manual address entry: street, zip code or city
     "item_description",
+    "transaction_category",  # the category of a bank transaction (ST-21)
 )
 
 
@@ -32,6 +33,7 @@ class Strategy:
     tier: int  # cheapest training tier expected to work (TR-1)
     applicable: bool = True
     note: str = ""
+    surface: str = "receipt"  # what it answers about: receipt | transaction
 
 
 STRATEGIES: Tuple[Strategy, ...] = (
@@ -116,6 +118,15 @@ STRATEGIES: Tuple[Strategy, ...] = (
         known=("image", "amount", "change"),
         improves=("subtotal", "total_tax"),
         tier=2,
+    ),
+    # The category of a bank transaction itself (not of a receipt), from
+    # its payee, description, counter account, direction and amount.
+    Strategy(
+        id="ST-21",
+        known=("csv_transaction",),
+        improves=("transaction_category",),
+        tier=2,
+        surface="transaction",
     ),
     # Nothing known at all: the value that is usually right. This is also
     # the baseline the image strategies have to beat (EV-3).

@@ -57,6 +57,15 @@ baseline of EV-3.
 | ST-18 | image + amount           | change                                     |
 | ST-19 | nothing                  | the usual value of every choice field      |
 | ST-20 | image + amount + change  | subtotal, total tax                        |
+| ST-21 | csv transaction          | the category of the bank transaction       |
+
+ST-21 is about the bank transaction itself, not a receipt: the model
+`csv-linear` learns, from the rows the one-hot rule store categorises, to
+rank the categories of a new row or group of rows (the categorisation TUI
+and the drafted rules for a new CSV). It is trained, evaluated (EV-2, EV-3
+with the most frequent category as baseline), registered (DS-*) and shown
+(`--status`, `--models`) like the receipt models; its dataset configuration
+has kind `transactions`.
 
 ST-7, ST-8 and ST-9 are registered but inactive: the current labels hold no
 separate items (the item description is a copy of the category), so there

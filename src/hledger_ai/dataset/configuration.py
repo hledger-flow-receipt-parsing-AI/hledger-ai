@@ -26,8 +26,9 @@ _NOT_LABEL_DATA = ("config",)
 class DatasetConfiguration:
     dataset_hash: str
     private: bool  # DS-5: contains private data
-    receipt_count: int
+    receipt_count: int  # receipts, or categorised rows for transactions
     registered_at: str  # DS-4: when it was first registered
+    kind: str = "receipts"  # receipts | transactions
 
 
 @typechecked
@@ -71,6 +72,7 @@ class DatasetRegistry:
         private: bool,
         receipt_count: int,
         now: Optional[str] = None,
+        kind: str = "receipts",
     ) -> DatasetConfiguration:
         """Add the configuration unless it is already known (DS-3, DS-4)."""
         known = self.configurations()
@@ -82,6 +84,7 @@ class DatasetRegistry:
             private=private,
             receipt_count=receipt_count,
             registered_at=now or datetime.now().isoformat(timespec="seconds"),
+            kind=kind,
         )
         os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
         temporary = self._path + ".tmp"

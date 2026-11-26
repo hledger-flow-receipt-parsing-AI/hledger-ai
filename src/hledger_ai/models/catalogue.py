@@ -25,6 +25,7 @@ class ModelSpec:
     uses_image: bool
     ocr_engine: Optional[str] = None  # which OCR engine reads the photos
     trained_here: bool = True  # False: listed, but trained by another tool
+    data: str = "receipts"  # what it learns from: receipts | transactions
     note: str = ""
 
 
@@ -110,6 +111,19 @@ MODELS: Tuple[ModelSpec, ...] = (
         uses_image=True,
         trained_here=False,
         note="pretrained vision model, not trained on your labels",
+    ),
+    ModelSpec(
+        name="csv-linear",
+        tier=2,
+        runtime="python",
+        weight_class="light",
+        ram_gb=0.3,
+        vram_gb=0.0,
+        disk_gb=0.02,
+        needs_gpu=False,
+        uses_image=False,
+        data="transactions",
+        note="bank transaction text to category, learnt from the rules",
     ),
     ModelSpec(
         name="setfit",

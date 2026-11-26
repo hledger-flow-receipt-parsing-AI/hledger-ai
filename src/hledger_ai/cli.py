@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Callable, Dict, List, Optional, Sequence, TextIO
+from typing import Callable, Dict, Optional, Sequence, TextIO
 
 from typeguard import typechecked
 
@@ -38,6 +38,8 @@ from hledger_ai.selection import write_selection
 from hledger_ai.strategies import STRATEGIES
 from hledger_ai.suggest.service import SuggestionService
 from hledger_ai.training.state import ModelState, StateStore
+from hledger_ai.transactions.dataset import TransactionData
+from hledger_ai.transactions.model import NotEnoughData
 
 
 @typechecked
@@ -148,10 +150,15 @@ def _summary(*, state: ModelState) -> str:
         if strategy.accuracy() is not None
     ]
     kind = "private" if state.private else "public"
+    unit = (
+        "transactions"
+        if get_model(name=state.model).data == "transactions"
+        else "receipts"
+    )
     return (
         f"{state.model}: trained on {kind} dataset"
-        f" {state.dataset_hash[:12]}; accuracy on unseen receipts: "
-        + (", ".join(scored) or "not enough receipts to measure")
+        f" {state.dataset_hash[:12]}; accuracy on unseen {unit}: "
+        + (", ".join(scored) or f"not enough {unit} to measure")
     )
 
 
@@ -187,6 +194,7 @@ def _show_status(*, ai: AiPaths, once: bool, stream: TextIO) -> None:
                 model=spec.name, dataset_hash=configuration.dataset_hash
             )
             for spec in MODELS
+            if spec.data == configuration.kind
         },
         strategy_ids=[s.id for s in STRATEGIES if s.applicable],
         once=once,
@@ -273,9 +281,11 @@ def run(
     ollama_url: str = "http://localhost:11434",
     ocr_engines: Optional[Dict[str, OcrEngine]] = None,
     device: Optional[Device] = None,
+    transactions: Optional[Callable[[], TransactionData]] = None,
 ) -> int:
     """Run the parsed command; returns the exit code. *ocr_engines* and
-    *device* replace the real OCR engines and the probed machine (tests)."""
+    *device* replace the real OCR engines and the probed machine (tests);
+    *transactions* loads the dataset of the transaction model."""
     if args.install_qvac:
         from hledger_ai.runtimes.qvac_client import install_qvac
 
@@ -323,8 +333,9 @@ def run(
                 force=args.force,
                 folds=args.folds,
                 on_progress=lambda state: out(format_progress(state=state)),
+                transactions=transactions,
             )
-        except UnknownName as error:
+        except (UnknownName, NotEnoughData) as error:
             out(str(error))
             return 2
         for state in states:
@@ -351,7 +362,11 @@ def main(*, argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     from hledger_config.config.load_config import load_config
 
-    config = load_config(config_path=args.config, pre_processed_output_dir=None)
+    config = load_config(
+        config_path=args.config, pre_processed_output_dir=None
+    )
+    from hledger_ai.transactions.dataset import load_transaction_data
+
     return run(
         args=args,
         finance=FinancePaths.from_config(config=config),
@@ -360,6 +375,7 @@ def main(*, argv: Optional[Sequence[str]] = None) -> int:
         ollama_url=(
             config.ai.ollama_url if config.ai else "http://localhost:11434"
         ),
+        transactions=lambda: load_transaction_data(config=config),
     )
 
 

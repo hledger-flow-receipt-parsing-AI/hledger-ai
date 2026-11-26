@@ -24,7 +24,7 @@ def test_without_a_choice_the_device_decides(tmp_path: Path) -> None:
     ai = _ai(tmp_path)
 
     assert read_selection(ai=ai) is None
-    assert default_models(ai=ai, device=DEVICE) == ["priors"]
+    assert default_models(ai=ai, device=DEVICE) == ["priors", "csv-linear"]
 
 
 def test_chosen_models_replace_the_automatic_choice(tmp_path: Path) -> None:

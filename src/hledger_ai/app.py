@@ -36,6 +36,10 @@ from hledger_ai.selection import read_selection
 from hledger_ai.strategies import STRATEGIES
 from hledger_ai.training.state import ModelState, StateStore
 from hledger_ai.training.trainer import TrainingData, train_model
+from hledger_ai.transactions.dataset import TransactionData
+from hledger_ai.transactions.model import NotEnoughData
+from hledger_ai.transactions.train import STRATEGY_ID as TRANSACTION_STRATEGY
+from hledger_ai.transactions.train import train_transaction_model
 
 log = logging.getLogger(__name__)
 
@@ -193,47 +197,107 @@ def train(
     folds: int = 4,
     ocr_engines: Optional[Dict[str, OcrEngine]] = None,
     on_progress: Optional[Callable[[ModelState], None]] = None,
+    transactions: Optional[Callable[[], TransactionData]] = None,
 ) -> List[ModelState]:
     """TR-2: train every selected model that is out of date.
 
     *names* limits the run to those models and strategies (TR-3);
-    *ocr_engines* replaces the real OCR engines (tests).
+    *ocr_engines* replaces the real OCR engines (tests); *transactions*
+    loads the bank rows the rule store categorises, for the transaction
+    model (only called when that model is trained).
     """
     models, strategy_ids = resolve_names(names=names)
     make_private(folder=ai.root)
-    data = collect_training_data(finance=finance, public_only=public_only)
-    DatasetRegistry(path=ai.registry_path).register(
-        dataset_hash=data.dataset_hash,
-        private=data.private,
-        receipt_count=len(data.examples),
-    )
-    store = StateStore(models_dir=ai.models_dir)
-    cache = OcrCache(cache_dir=ai.ocr_cache_dir)
-    weights = example_weights(data=data, corrections_path=ai.corrections_path)
-    states: List[ModelState] = []
-    for name in models or default_models(ai=ai):
-        spec = get_model(name=name)
+    chosen = [
+        get_model(name=name) for name in (models or default_models(ai=ai))
+    ]
+    for spec in chosen:
         if not spec.trained_here:
             raise UnknownName(
-                f"{name} is not trained by --train ({spec.note})."
+                f"{spec.name} is not trained by --train ({spec.note})."
             )
-        engine: Optional[OcrEngine] = None
-        if spec.ocr_engine is not None:
-            engine = (ocr_engines or {}).get(
-                spec.ocr_engine
-            ) or build_ocr_engine(engine_id=spec.ocr_engine)
-        states.append(
-            train_model(
-                spec=spec,
-                data=data,
-                store=store,
-                cache=cache,
-                ocr_engine=engine,
-                strategy_ids=strategy_ids,
-                folds=folds,
-                force=force,
-                weights=weights,
-                on_progress=on_progress,
-            )
+    receipt_specs = [spec for spec in chosen if spec.data == "receipts"]
+    transaction_specs = [
+        spec
+        for spec in chosen
+        if spec.data == "transactions"
+        and (strategy_ids is None or TRANSACTION_STRATEGY in strategy_ids)
+    ]
+    store = StateStore(models_dir=ai.models_dir)
+    registry = DatasetRegistry(path=ai.registry_path)
+    states: List[ModelState] = []
+
+    if receipt_specs:
+        data = collect_training_data(finance=finance, public_only=public_only)
+        registry.register(
+            dataset_hash=data.dataset_hash,
+            private=data.private,
+            receipt_count=len(data.examples),
         )
+        cache = OcrCache(cache_dir=ai.ocr_cache_dir)
+        weights = example_weights(
+            data=data, corrections_path=ai.corrections_path
+        )
+        for spec in receipt_specs:
+            engine: Optional[OcrEngine] = None
+            if spec.ocr_engine is not None:
+                engine = (ocr_engines or {}).get(
+                    spec.ocr_engine
+                ) or build_ocr_engine(engine_id=spec.ocr_engine)
+            states.append(
+                train_model(
+                    spec=spec,
+                    data=data,
+                    store=store,
+                    cache=cache,
+                    ocr_engine=engine,
+                    strategy_ids=strategy_ids,
+                    folds=folds,
+                    force=force,
+                    weights=weights,
+                    on_progress=on_progress,
+                )
+            )
+
+    if transaction_specs and transactions is None:
+        # A caller that only knows the receipt folders (an older
+        # `--train`) still trains the receipt models; only naming the
+        # transaction model without its data is an error.
+        if any(spec.name in models for spec in transaction_specs):
+            raise UnknownName(
+                "The transaction model needs the finance config: run"
+                " `python -m hledger_ai --config config.yaml --train` or"
+                " `hledger_preprocessor --train`."
+            )
+        log.info(
+            "%s skipped: no bank transactions to read without the config",
+            ", ".join(spec.name for spec in transaction_specs),
+        )
+        transaction_specs = []
+    if transaction_specs and transactions is not None:
+        transaction_data = transactions()
+        registry.register(
+            dataset_hash=transaction_data.dataset_hash,
+            private=transaction_data.private,
+            receipt_count=len(transaction_data.examples),
+            kind="transactions",
+        )
+        for spec in transaction_specs:
+            try:
+                states.append(
+                    train_transaction_model(
+                        spec=spec,
+                        data=transaction_data,
+                        store=store,
+                        folds=folds,
+                        force=force,
+                        on_progress=on_progress,
+                    )
+                )
+            except NotEnoughData:
+                if spec.name in models:
+                    raise
+                log.info(
+                    "%s skipped: no categorised transactions yet", spec.name
+                )
     return states
