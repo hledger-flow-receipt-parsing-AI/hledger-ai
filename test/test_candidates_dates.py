@@ -33,6 +33,10 @@ D = date(2025, 3, 17)
         ("17-MAR-25", [(D, "text")]),
         ("Mar 17, 2025", [(D, "text")]),
         ("March 17 2025", [(D, "text")]),
+        # French toll tickets print the date after leader dots.
+        ("Date... .17/03/25", [(D, "dmy")]),
+        ("Date......17/03/25", [(D, "dmy")]),
+        ("LE 17-03-25 A 14-18-36", [(D, "dmy")]),
         ("32-13-2025", []),
         ("17-03-1925", []),  # not a plausible receipt year
         ("1234 AB Voorbeeldstad", []),
@@ -42,6 +46,13 @@ D = date(2025, 3, 17)
 )
 def test_dates_in_text(text: str, want: List[Tuple[date, str]]) -> None:
     assert [(d.value, d.style) for d in find_dates(text=text)] == want
+
+
+@pytest.mark.parametrize("word", ["AOU", "aou", "AOÛT", "août"])
+def test_french_august(word: str) -> None:
+    assert [d.value for d in find_dates(text=f"15-{word}-26")] == [
+        date(2026, 8, 15)
+    ]
 
 
 def test_ambiguous_day_month_order_yields_both_readings() -> None:
@@ -71,6 +82,15 @@ def test_ambiguous_day_month_order_yields_both_readings() -> None:
         ("TOTAAL 11,54", []),
         ("14.32", []),  # without a cue this is more likely an amount
         ("1234 AB", []),
+        # French clocks.
+        ("14h18", ["14:18"]),
+        ("14 H 18", ["14:18"]),
+        ("le 17/03/2025 a 9h05", ["09:05"]),
+        ("LE 17-03-25 A 14-18-36", ["14:18"]),
+        ("à 07-45", ["07:45"]),
+        ("25h99", []),
+        ("TH12", []),
+        ("REF 4H123", []),
     ],
 )
 def test_times_in_text(text: str, want: List[str]) -> None:

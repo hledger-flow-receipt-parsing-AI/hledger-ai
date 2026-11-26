@@ -46,7 +46,8 @@ from hledger_ai.suggest.evidence import ReceiptEvidence
 # 4: text vectors no longer leak between training folds (TextFeaturizer).
 # 5: "nothing" is a subtotal answer (OptionalAmountExpert); manual address
 #    knowledge.
-ENGINE_VERSION = "5"
+# 6: dates after leader dots ("Date... .17/03/25"), "aou", French times.
+ENGINE_VERSION = "6"
 
 # The strategy that knows nothing: the most frequent value so far.
 USUAL_VALUE = "ST-19"

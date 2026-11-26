@@ -28,7 +28,7 @@ _MONTH_WORDS: Dict[int, str] = {
     5: "mei may mai mayo maggio mag maio",
     6: "jun juni june juin junio giugno giu junho",
     7: "jul juli july juillet juil julio luglio lug julho",
-    8: "aug augustus august aout agosto ago",
+    8: "aug augustus august aout aou agosto ago",
     9: "sep sept september septembre septiembre settembre set setembro",
     10: "okt oktober oct october octobre octubre ottobre ott outubro out",
     11: "nov november novembre noviembre novembro",
@@ -43,8 +43,11 @@ _MONTHS: Dict[str, int] = {
 # OCR often drops the space between a date and the time after it.
 _GLUED_TIME = re.compile(r"((?:19|20)\d{2})(\d{1,2}\s?:\s?\d{2})")
 _SEP = r"\s?[-/.]\s?"
+# Not inside a longer number ("12.17/03/25" is no date), but leader dots
+# before it are fine: French toll tickets print "Date... .17/03/25".
 _NUMERIC = re.compile(
-    rf"(?<![\d.,])(\d{{1,2}}){_SEP}(\d{{1,2}}){_SEP}(\d{{4}}|\d{{2}})(?!\d)"
+    rf"(?<!\d)(?<!\d[.,])(\d{{1,2}}){_SEP}(\d{{1,2}}){_SEP}(\d{{4}}|\d{{2}})"
+    rf"(?!\d)"
 )
 _YEAR_FIRST = re.compile(
     rf"(?<!\d)((?:19|20)\d{{2}}){_SEP}(\d{{1,2}}){_SEP}(\d{{1,2}})(?!\d)"
@@ -67,6 +70,12 @@ _COLON_TIME = re.compile(
 _DOT_TIME = re.compile(
     r"(?<![\d:.,])(\d{1,2})\.(\d{2})(?:\.(\d{2}))?(?![\d.,])"
     r"(\s?(?:uur|u|h)\b)?"
+)
+# French clocks: "14h18", "14 H 18".
+_H_TIME = re.compile(r"(?<![\w.,])(\d{1,2})\s?[hH]\s?(\d{2})(?!\d)")
+# French tickets: "LE 29-05-26 A 14-18-36" (à, the hour, with dashes).
+_A_TIME = re.compile(
+    r"(?<!\w)[AaÀà]\s(\d{1,2})-(\d{2})(?:-(\d{2}))?(?![\d-])"
 )
 _FILENAME_TIME = re.compile(r"(?<!\d)((?:19|20)\d{6})[_-]?(\d{6})(?!\d)")
 
@@ -235,6 +244,22 @@ def find_times(*, text: str) -> List[FoundTime]:
                     end=match.end(),
                 )
             )
+    for pattern in (_H_TIME, _A_TIME):
+        for match in pattern.finditer(searchable):
+            groups = match.groups()
+            second = int(groups[2]) if len(groups) > 2 and groups[2] else None
+            value = _clock(
+                hour=int(groups[0]), minute=int(groups[1]), second=second
+            )
+            if value is not None:
+                found.append(
+                    FoundTime(
+                        value=value,
+                        has_seconds=second is not None,
+                        start=match.start(),
+                        end=match.end(),
+                    )
+                )
     return sorted(found, key=lambda f: f.start)
 
 

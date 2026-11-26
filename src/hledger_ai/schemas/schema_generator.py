@@ -37,6 +37,7 @@ GLOBAL_SKIP_FIELDS: Set[str] = {
     "withdrawal_metadata",
     "payed_for_item_rounded",
     "parent_receipt_category",
+    "tags",  # events/projects and traceability, typed by the user
 }
 
 
