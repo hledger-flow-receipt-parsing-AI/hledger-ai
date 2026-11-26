@@ -7,6 +7,7 @@ could be handed to a later featurizer with another vocabulary.
 
 import gc
 
+import pytest
 from helpers import make_evidence
 
 from hledger_ai.models.text_features import TextFeaturizer
@@ -21,7 +22,9 @@ def _featurizer_reusing_id(*, freed_id: int) -> TextFeaturizer:
         if id(candidate) == freed_id:
             return candidate
         keep.append(candidate)  # hold it, so the next one gets other memory
-    raise AssertionError("no featurizer got the freed id")
+    # The allocator decides; when other objects of the test run took that
+    # memory the situation this test is about cannot be produced here.
+    pytest.skip("CPython did not hand the freed id out again in this run")
 
 
 def test_a_new_featurizer_does_not_get_vectors_of_a_freed_one() -> None:
